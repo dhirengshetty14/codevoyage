@@ -37,7 +37,7 @@ jobs:
 
       - name: Run backend tests
         env:
-          PYTHONPATH: .
+          PYTHONPATH: ${{ github.workspace }}/backend
         run: pytest -q tests
 
       - name: Compile check

@@ -2,10 +2,15 @@
 Test configuration and fixtures
 """
 
+import os
+import sys
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
+
+# Ensure `app` package is importable regardless of pytest rootdir.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.main import app
 from app.core.database import Base, get_db
