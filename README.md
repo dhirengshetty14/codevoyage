@@ -1,4 +1,4 @@
-# CodeVoyage 🚀
+# CodeVoyage- Crazy Github Tool🚀
 
 A production-grade 3D codebase visualization and analysis platform that transforms Git repositories into interactive, AI-powered insights.
 
