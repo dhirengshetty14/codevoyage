@@ -62,6 +62,8 @@ export default function HomePage() {
   const [snapshotDiff, setSnapshotDiff] = useState<any | null>(null)
   const [selectedBlastPath, setSelectedBlastPath] = useState<string>("")
   const [timelineIndex, setTimelineIndex] = useState<number>(0)
+  const [selectedPreMortemId, setSelectedPreMortemId] = useState<string>("")
+  const [shockScenarioIndex, setShockScenarioIndex] = useState<number>(0)
 
   const stream = useAnalysisStream(activeAnalysisId ?? undefined)
   const deterministic = analysis?.ai_insights?.deterministic_insights
@@ -151,11 +153,54 @@ export default function HomePage() {
     [timePoints, clampedTimelineIndex]
   )
   const fingerprint = deterministic?.repo_fingerprint
+  const preMortemScenarios = deterministic?.pr_pre_mortem?.scenarios || []
+  const selectedPreMortem =
+    preMortemScenarios.find((scenario: any) => scenario.scenario_id === selectedPreMortemId) || preMortemScenarios[0]
+  const shockScenarios = deterministic?.bus_factor_shock_test?.scenarios || []
+  const clampedShockScenarioIndex = Math.min(Math.max(0, shockScenarioIndex), Math.max(0, shockScenarios.length - 1))
+  const selectedShockScenario = shockScenarios[clampedShockScenarioIndex] || null
+  const forecast = deterministic?.engineering_weather_forecast
+  const forecastSeries = forecast?.projected_weeks || []
+  const anomalyDetective = deterministic?.anomaly_detective
+  const anomalyCounts = anomalyDetective?.counts_by_type || []
+  const anomalyHighlights = anomalyDetective?.highlights || []
+  const actionBriefs = deterministic?.ai_action_briefs?.briefs || []
+  const topBrief = deterministic?.ai_action_briefs?.top_priority
+  const shockSeries = shockScenarios.map((scenario: any) => ({
+    removed: scenario.removed_count,
+    resilience: scenario.resilience_score,
+    coverageLost: scenario.coverage_lost_percent,
+  }))
+  const forecastTone =
+    forecast?.outlook === "sunny"
+      ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-300"
+      : forecast?.outlook === "cloudy"
+        ? "border-amber-400/40 bg-amber-500/10 text-amber-300"
+        : "border-rose-400/40 bg-rose-500/10 text-rose-300"
 
   useEffect(() => {
     if (!timePoints.length) return
     setTimelineIndex((prev) => Math.min(prev, timePoints.length - 1))
   }, [timePoints.length])
+
+  useEffect(() => {
+    if (!preMortemScenarios.length) {
+      setSelectedPreMortemId("")
+      return
+    }
+    setSelectedPreMortemId((prev) => {
+      if (prev && preMortemScenarios.some((scenario: any) => scenario.scenario_id === prev)) return prev
+      return preMortemScenarios[0].scenario_id
+    })
+  }, [preMortemScenarios.length, deterministic?.pr_pre_mortem?.portfolio_risk_score])
+
+  useEffect(() => {
+    if (!shockScenarios.length) {
+      setShockScenarioIndex(0)
+      return
+    }
+    setShockScenarioIndex((prev) => Math.min(prev, shockScenarios.length - 1))
+  }, [shockScenarios.length, deterministic?.bus_factor_shock_test?.resilience_score])
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100">
@@ -397,6 +442,214 @@ export default function HomePage() {
                   <p className="text-slate-400">No candidates available.</p>
                 )}
               </Panel>
+            </section>
+
+            <section className="mt-6 grid gap-4 lg:grid-cols-2">
+              <Panel title="PR Pre-Mortem Simulator">
+                <div className="text-sm text-slate-300">
+                  <p>
+                    Portfolio Risk Score:{" "}
+                    <span className="font-semibold text-cyan-300">
+                      {deterministic?.pr_pre_mortem?.portfolio_risk_score ?? 0}
+                    </span>
+                  </p>
+                  <p>High-Risk Targets: {deterministic?.pr_pre_mortem?.high_risk_targets ?? 0}</p>
+                </div>
+                {preMortemScenarios.length > 0 ? (
+                  <>
+                    <div className="mt-3">
+                      <select
+                        className="w-full rounded border border-white/20 bg-black/30 px-3 py-2"
+                        value={selectedPreMortemId || selectedPreMortem?.scenario_id || ""}
+                        onChange={(e) => setSelectedPreMortemId(e.target.value)}
+                      >
+                        {preMortemScenarios.map((scenario: any, idx: number) => (
+                          <option key={idx} value={scenario.scenario_id}>
+                            {scenario.target_path}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {selectedPreMortem && (
+                      <div className="mt-4 space-y-2 text-sm text-slate-300">
+                        <p>
+                          Risk Score: <span className="font-semibold text-cyan-300">{selectedPreMortem.risk_score}</span>
+                        </p>
+                        <p>Risk Tier: <span className="font-semibold uppercase">{selectedPreMortem.risk_tier}</span></p>
+                        <p>Estimated Review Hours: {selectedPreMortem.estimated_review_hours}</p>
+                        <p>Directory: {selectedPreMortem.directory}</p>
+                        <div>
+                          <p className="font-semibold text-slate-200">Failure Modes</p>
+                          <ul className="mt-1 list-disc space-y-1 pl-5">
+                            {(selectedPreMortem.failure_modes || []).slice(0, 3).map((mode: any, idx: number) => (
+                              <li key={idx}>
+                                {mode.label} ({mode.probability_percent}%)
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-200">Mitigations</p>
+                          <ul className="mt-1 list-disc space-y-1 pl-5">
+                            {(selectedPreMortem.mitigations || []).slice(0, 3).map((step: string, idx: number) => (
+                              <li key={idx}>{step}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="mt-3 text-slate-400">No pre-mortem scenarios available.</p>
+                )}
+              </Panel>
+
+              <Panel title="Bus-Factor Shock Test">
+                <div className="text-sm text-slate-300">
+                  <p>
+                    Baseline Bus Factor(50%):{" "}
+                    <span className="font-semibold text-cyan-300">
+                      {deterministic?.bus_factor_shock_test?.baseline_bus_factor_50_percent ?? 0}
+                    </span>
+                  </p>
+                  <p>Resilience Score: {deterministic?.bus_factor_shock_test?.resilience_score ?? 0}</p>
+                </div>
+
+                {shockScenarios.length > 0 ? (
+                  <>
+                    <div className="mt-3">
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.max(0, shockScenarios.length - 1)}
+                        value={clampedShockScenarioIndex}
+                        onChange={(e) => setShockScenarioIndex(Number(e.target.value))}
+                        className="w-full"
+                      />
+                      <p className="mt-1 text-xs text-slate-400">
+                        Simulating loss of top {selectedShockScenario?.removed_count ?? 0} contributor(s)
+                      </p>
+                    </div>
+
+                    {selectedShockScenario && (
+                      <div className="mt-3 space-y-1 text-sm text-slate-300">
+                        <p>Coverage Lost: {selectedShockScenario.coverage_lost_percent}%</p>
+                        <p>New Bus Factor(50%): {selectedShockScenario.new_bus_factor_50_percent}</p>
+                        <p>
+                          Risk Tier:{" "}
+                          <span className="font-semibold uppercase">{selectedShockScenario.risk_tier}</span>
+                        </p>
+                        <p>Recovery Estimate: {selectedShockScenario.recovery_days_estimate} days</p>
+                      </div>
+                    )}
+
+                    <ResponsiveContainer width="100%" height={220}>
+                      <BarChart data={shockSeries}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="removed" stroke="#cbd5e1" />
+                        <YAxis stroke="#cbd5e1" domain={[0, 100]} />
+                        <Tooltip />
+                        <Bar dataKey="resilience" fill="#38bdf8" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </>
+                ) : (
+                  <p className="mt-3 text-slate-400">No shock-test scenarios available.</p>
+                )}
+              </Panel>
+            </section>
+
+            <section className="mt-6 grid gap-4 lg:grid-cols-2">
+              <Panel title="Engineering Weather Forecast">
+                {forecast ? (
+                  <>
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${forecastTone}`}>
+                        {forecast.outlook}
+                      </span>
+                      <span className="text-sm text-slate-300">
+                        Confidence: <span className="font-semibold">{forecast.confidence}</span>
+                      </span>
+                    </div>
+                    <div className="space-y-1 text-sm text-slate-300">
+                      <p>Pressure Index: {forecast.pressure_index}</p>
+                      <p>Incident Risk: {forecast.incident_risk_percent}%</p>
+                      <p>Expected Review Lag: {forecast.expected_review_lag_hours}h</p>
+                      <p className="text-slate-200">{forecast.forecast_summary}</p>
+                    </div>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <LineChart data={forecastSeries}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="label" stroke="#cbd5e1" />
+                        <YAxis stroke="#cbd5e1" />
+                        <Tooltip />
+                        <Line type="monotone" dataKey="expected_mid_commits" stroke="#22d3ee" strokeWidth={3} />
+                        <Line type="monotone" dataKey="expected_max_commits" stroke="#f59e0b" strokeDasharray="5 5" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </>
+                ) : (
+                  <p className="text-slate-400">No forecast data available.</p>
+                )}
+              </Panel>
+
+              <Panel title="Anomaly Detective">
+                {anomalyDetective ? (
+                  <>
+                    <div className="space-y-1 text-sm text-slate-300">
+                      <p>
+                        Risk Index:{" "}
+                        <span className="font-semibold text-cyan-300">{anomalyDetective.risk_index ?? 0}</span>
+                      </p>
+                      <p>Anomaly Count: {anomalyDetective.anomaly_count ?? 0}</p>
+                      <p>Anomaly Rate: {anomalyDetective.anomaly_rate_percent ?? 0}%</p>
+                    </div>
+                    <ResponsiveContainer width="100%" height={210}>
+                      <BarChart data={anomalyCounts}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="label" stroke="#cbd5e1" />
+                        <YAxis stroke="#cbd5e1" />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="#f97316" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                    <div className="mt-2 space-y-1 text-xs text-slate-300">
+                      {anomalyHighlights.slice(0, 3).map((item: any, idx: number) => (
+                        <p key={idx}>
+                          [{String(item.severity || "low").toUpperCase()}] {item.headline}
+                        </p>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-slate-400">No anomaly report available.</p>
+                )}
+              </Panel>
+            </section>
+
+            <section className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
+              <h3 className="text-lg font-semibold">AI Action Briefs</h3>
+              {topBrief && (
+                <p className="mt-2 text-sm text-cyan-200">
+                  Top Priority ({topBrief.priority}): {topBrief.title}
+                </p>
+              )}
+              {!actionBriefs.length && <p className="mt-2 text-slate-400">No action briefs available.</p>}
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {actionBriefs.map((brief: any, idx: number) => (
+                  <div key={idx} className="rounded-lg border border-white/10 bg-black/20 p-4">
+                    <div className="flex items-center justify-between">
+                      <p className="font-semibold text-slate-100">{brief.title}</p>
+                      <span className="rounded-full border border-white/20 px-2 py-0.5 text-xs">{brief.priority}</span>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-300">{brief.why_now}</p>
+                    <p className="mt-2 text-xs text-slate-400">Owner: {brief.owner_role}</p>
+                    <p className="mt-1 text-xs text-slate-400">ETA: {brief.timeline_days} days</p>
+                    <p className="mt-2 text-xs text-emerald-300">Success: {brief.success_metric}</p>
+                  </div>
+                ))}
+              </div>
             </section>
 
             <section className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
