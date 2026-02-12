@@ -41,6 +41,10 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
 class InsightService:
     """Builds analysis insights from git/complexity outputs."""
 
@@ -139,6 +143,29 @@ class InsightService:
                 else 0,
             },
             complexity_profile={"high_risk_file_count": len(high_risk_files)},
+        )
+        anomaly_detective = self._anomaly_detective(parsed_commits)
+        bus_factor_shock_test = self._bus_factor_shock_test(top_contributors, total_commits)
+        engineering_weather_forecast = self._engineering_weather_forecast(
+            weekly_digest=weekly_digest,
+            risk_flags=risk_flags,
+            release_readiness=release_readiness,
+            anomaly_report=anomaly_detective,
+            health_scorecard=health_scorecard,
+        )
+        pr_pre_mortem = self._pr_pre_mortem_simulator(
+            blast_radius=blast_radius,
+            hotspots=hotspots,
+            top_contributors=top_contributors,
+            engineering_signals=engineering_signals,
+        )
+        ai_action_briefs = self._ai_action_briefs(
+            pre_mortem=pr_pre_mortem,
+            bus_factor_shock=bus_factor_shock_test,
+            engineering_forecast=engineering_weather_forecast,
+            anomaly_report=anomaly_detective,
+            release_readiness=release_readiness,
+            risk_flags=risk_flags,
         )
 
         insights = {
@@ -246,6 +273,11 @@ class InsightService:
             "weekly_health_digest": weekly_digest,
             "release_readiness": release_readiness,
             "repo_archetypes": archetypes,
+            "pr_pre_mortem": pr_pre_mortem,
+            "bus_factor_shock_test": bus_factor_shock_test,
+            "engineering_weather_forecast": engineering_weather_forecast,
+            "anomaly_detective": anomaly_detective,
+            "ai_action_briefs": ai_action_briefs,
         }
         insights["executive_summary"] = self._executive_summary(insights)
         return insights
@@ -1009,6 +1041,684 @@ class InsightService:
             "storyline": storyline,
         }
 
+    def _anomaly_detective(self, commits: List[Dict[str, Any]]) -> Dict[str, Any]:
+        ordered = sorted(
+            [x for x in commits if x.get("committed_at")],
+            key=lambda x: x["committed_at"],
+        )
+        if not ordered:
+            return {
+                "risk_index": 0,
+                "anomaly_count": 0,
+                "anomaly_rate_percent": 0.0,
+                "counts_by_type": [],
+                "highlights": [],
+                "recommended_checks": ["No anomalies available without commit history."],
+            }
+
+        commit_sizes = sorted(
+            int(c.get("insertions", 0) or 0) + int(c.get("deletions", 0) or 0)
+            for c in ordered
+        )
+        files_changed = sorted(int(c.get("files_changed", 0) or 0) for c in ordered)
+        p90_changes = self._percentile(commit_sizes, 90)
+        p95_changes = self._percentile(commit_sizes, 95)
+        p95_files = self._percentile(files_changed, 95)
+
+        daily_buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for commit in ordered:
+            day_key = commit["committed_at"].date().isoformat()
+            daily_buckets[day_key].append(commit)
+
+        daily_commit_counts = [len(items) for items in daily_buckets.values()]
+        median_daily_commits = float(median(daily_commit_counts)) if daily_commit_counts else 1.0
+        anomalies: List[Dict[str, Any]] = []
+
+        def _add_anomaly(
+            anomaly_type: str,
+            severity: str,
+            score: float,
+            headline: str,
+            detail: str,
+            commit: Dict[str, Any] | None = None,
+            day: str | None = None,
+        ):
+            item = {
+                "type": anomaly_type,
+                "severity": severity,
+                "score": round(score, 2),
+                "headline": headline,
+                "detail": detail,
+                "date": day or (commit["committed_at"].date().isoformat() if commit else None),
+            }
+            if commit:
+                item["commit_sha"] = str(commit.get("sha", ""))[:10]
+                item["author"] = commit.get("author_name") or "unknown"
+                item["changes"] = int(commit.get("insertions", 0) or 0) + int(commit.get("deletions", 0) or 0)
+            anomalies.append(item)
+
+        for commit in ordered:
+            dt = commit["committed_at"]
+            message = str(commit.get("message", "")).lower()
+            changes = int(commit.get("insertions", 0) or 0) + int(commit.get("deletions", 0) or 0)
+            files = int(commit.get("files_changed", 0) or 0)
+
+            if changes >= max(500, p95_changes * 1.8):
+                _add_anomaly(
+                    anomaly_type="mega_commit",
+                    severity="high" if changes >= max(1200, p95_changes * 2.3) else "medium",
+                    score=min(100.0, 55 + (changes / max(1.0, p90_changes + 1)) * 16),
+                    headline="Large commit spike",
+                    detail=f"Commit changed {changes} lines in one push.",
+                    commit=commit,
+                )
+
+            if dt.hour < 5 and changes >= max(220, p90_changes * 1.35):
+                _add_anomaly(
+                    anomaly_type="off_hours_heavy_change",
+                    severity="medium",
+                    score=min(100.0, 45 + (changes / max(1.0, p90_changes + 1)) * 10),
+                    headline="Large off-hours commit",
+                    detail=f"Heavy change landed at {dt.hour:02d}:00, increasing review risk.",
+                    commit=commit,
+                )
+
+            if files >= max(35, p95_files * 1.5):
+                _add_anomaly(
+                    anomaly_type="wide_surface_area",
+                    severity="high" if files >= 80 else "medium",
+                    score=min(100.0, 50 + files * 0.7),
+                    headline="Wide-surface change",
+                    detail=f"Commit touched {files} files, which can hide regressions.",
+                    commit=commit,
+                )
+
+            if ("revert" in message or "hotfix" in message) and changes >= max(80, p90_changes * 0.75):
+                _add_anomaly(
+                    anomaly_type="stability_event",
+                    severity="medium",
+                    score=min(100.0, 42 + changes * 0.05),
+                    headline="Stability-related high-change commit",
+                    detail="Revert/hotfix keyword appears in a relatively large commit.",
+                    commit=commit,
+                )
+
+        for day, day_commits in daily_buckets.items():
+            if len(day_commits) >= max(8, int(math.ceil(median_daily_commits * 3))):
+                largest_commit = max(
+                    day_commits,
+                    key=lambda x: int(x.get("insertions", 0) or 0) + int(x.get("deletions", 0) or 0),
+                )
+                _add_anomaly(
+                    anomaly_type="daily_burst",
+                    severity="medium",
+                    score=min(100.0, 40 + len(day_commits) * 4.5),
+                    headline="Burst activity day",
+                    detail=f"{len(day_commits)} commits landed on {day}, far above baseline cadence.",
+                    commit=largest_commit,
+                    day=day,
+                )
+
+        for previous, current in zip(ordered, ordered[1:]):
+            gap_days = (current["committed_at"] - previous["committed_at"]).days
+            if gap_days >= 14:
+                _add_anomaly(
+                    anomaly_type="long_gap",
+                    severity="low" if gap_days < 30 else "medium",
+                    score=min(100.0, 20 + gap_days * 1.2),
+                    headline="Long inactivity gap",
+                    detail=f"Detected a {gap_days}-day delivery gap between commits.",
+                    commit=current,
+                )
+
+        severity_rank = {"high": 3, "medium": 2, "low": 1}
+        anomalies = sorted(
+            anomalies,
+            key=lambda item: (severity_rank.get(str(item.get("severity")), 0), float(item.get("score", 0))),
+            reverse=True,
+        )
+
+        type_counter = Counter(str(item.get("type", "unknown")) for item in anomalies)
+        high_count = sum(1 for item in anomalies if item.get("severity") == "high")
+        medium_count = sum(1 for item in anomalies if item.get("severity") == "medium")
+        low_count = sum(1 for item in anomalies if item.get("severity") == "low")
+        anomaly_rate = round((len(anomalies) / max(1, len(ordered))) * 100, 2)
+        risk_index = round(
+            _clamp(
+                high_count * 12 + medium_count * 6 + low_count * 2 + anomaly_rate * 1.2,
+                0.0,
+                100.0,
+            ),
+            2,
+        )
+
+        recommendations = []
+        if high_count > 0:
+            recommendations.append("Require peer review and regression tests for high-change commits.")
+        if type_counter.get("off_hours_heavy_change", 0) > 0:
+            recommendations.append("Introduce scheduled review windows for off-hours high-risk commits.")
+        if type_counter.get("wide_surface_area", 0) > 0:
+            recommendations.append("Split broad changes into staged pull requests by directory boundary.")
+        if not recommendations:
+            recommendations.append("No major anomalies detected; keep existing review discipline.")
+
+        return {
+            "risk_index": risk_index,
+            "anomaly_count": len(anomalies),
+            "anomaly_rate_percent": anomaly_rate,
+            "counts_by_type": [
+                {"type": anomaly_type, "label": anomaly_type.replace("_", " "), "count": count}
+                for anomaly_type, count in type_counter.most_common()
+            ],
+            "highlights": anomalies[:15],
+            "recommended_checks": recommendations,
+        }
+
+    def _bus_factor_shock_test(
+        self,
+        top_contributors: List[Dict[str, Any]],
+        total_commits: int,
+    ) -> Dict[str, Any]:
+        contributor_rows = []
+        for contributor in top_contributors:
+            commits_count = _safe_int(contributor.get("commits"), 0)
+            if commits_count <= 0:
+                continue
+            contributor_rows.append(
+                {
+                    "name": contributor.get("name") or contributor.get("email") or "unknown",
+                    "commits": commits_count,
+                }
+            )
+
+        if not contributor_rows:
+            return {
+                "baseline_bus_factor_50_percent": 0,
+                "resilience_score": 0,
+                "single_point_of_failure": False,
+                "scenarios": [],
+            }
+
+        effective_total = max(total_commits, sum(item["commits"] for item in contributor_rows))
+        baseline_bus_factor = self._bus_factor([item["commits"] for item in contributor_rows])
+        top_share = round((contributor_rows[0]["commits"] / max(1, effective_total)) * 100, 2)
+        max_removals = min(5, len(contributor_rows))
+        scenarios = []
+
+        for removed_count in range(1, max_removals + 1):
+            removed = contributor_rows[:removed_count]
+            remaining = contributor_rows[removed_count:]
+            removed_commits = sum(item["commits"] for item in removed)
+            remaining_commits = max(0, effective_total - removed_commits)
+            coverage_lost_percent = round((removed_commits / max(1, effective_total)) * 100, 2)
+            remaining_bus_factor = self._bus_factor([item["commits"] for item in remaining])
+            top_remaining_share = (
+                round((remaining[0]["commits"] / max(1, remaining_commits)) * 100, 2)
+                if remaining
+                else 100.0
+            )
+            resilience_score = round(
+                _clamp(
+                    100
+                    - (
+                        coverage_lost_percent * 0.62
+                        + max(0.0, 55 - remaining_bus_factor * 14)
+                        + max(0.0, top_remaining_share - 35) * 0.45
+                    ),
+                    0.0,
+                    100.0,
+                ),
+                2,
+            )
+            risk_tier = (
+                "critical"
+                if resilience_score < 35
+                else "high"
+                if resilience_score < 55
+                else "moderate"
+                if resilience_score < 75
+                else "low"
+            )
+
+            per_person_capacity = (remaining_commits / max(1, len(remaining))) if remaining else 0.0
+            recovery_days = (
+                int(round(max(2.0, (removed_commits / max(1.0, per_person_capacity)) * 3.0)))
+                if remaining
+                else 30
+            )
+
+            scenarios.append(
+                {
+                    "removed_contributors": [item["name"] for item in removed],
+                    "removed_count": removed_count,
+                    "coverage_lost_percent": coverage_lost_percent,
+                    "coverage_remaining_percent": round(100 - coverage_lost_percent, 2),
+                    "new_bus_factor_50_percent": remaining_bus_factor,
+                    "top_remaining_share_percent": top_remaining_share,
+                    "resilience_score": resilience_score,
+                    "risk_tier": risk_tier,
+                    "recovery_days_estimate": recovery_days,
+                }
+            )
+
+        resilience_baseline = round(
+            sum(item["resilience_score"] for item in scenarios[:3]) / max(1, min(3, len(scenarios))),
+            2,
+        )
+        headline = (
+            "Ownership is resilient against contributor loss."
+            if scenarios and scenarios[0]["resilience_score"] >= 75
+            else "Contributor concentration poses delivery risk under shock scenarios."
+        )
+
+        return {
+            "headline": headline,
+            "baseline_bus_factor_50_percent": baseline_bus_factor,
+            "resilience_score": resilience_baseline,
+            "single_point_of_failure": top_share >= 50,
+            "top_contributor_share_percent": top_share,
+            "contributors_considered": contributor_rows[:10],
+            "scenarios": scenarios,
+        }
+
+    def _engineering_weather_forecast(
+        self,
+        weekly_digest: Dict[str, Any],
+        risk_flags: List[Dict[str, Any]],
+        release_readiness: Dict[str, Any],
+        anomaly_report: Dict[str, Any],
+        health_scorecard: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        weeks = weekly_digest.get("weeks") or []
+        if not weeks:
+            return {
+                "outlook": "unknown",
+                "pressure_index": 0,
+                "confidence": 0,
+                "signals": [],
+                "projected_weeks": [],
+                "forecast_summary": "Forecast unavailable: not enough weekly activity data.",
+            }
+
+        recent_weeks = weeks[-8:]
+        commit_series = [int(item.get("commits", 0) or 0) for item in recent_weeks]
+        avg_commits = sum(commit_series) / max(1, len(commit_series))
+        variance = sum((value - avg_commits) ** 2 for value in commit_series) / max(1, len(commit_series))
+        volatility = math.sqrt(variance)
+        volatility_percent = (volatility / avg_commits) * 100 if avg_commits > 0 else 0.0
+
+        latest = (weekly_digest.get("latest") or recent_weeks[-1]) if recent_weeks else {}
+        trend = weekly_digest.get("trend") or {}
+        momentum = str(trend.get("momentum", "stable"))
+        night_ratio = float(latest.get("night_commit_ratio", 0) or 0)
+        high_risk_flags = sum(1 for flag in risk_flags if flag.get("severity") == "high")
+        medium_risk_flags = sum(1 for flag in risk_flags if flag.get("severity") == "medium")
+        readiness_score = float(
+            release_readiness.get("score", health_scorecard.get("overall_score", 0)) or 0
+        )
+        anomaly_risk = float(anomaly_report.get("risk_index", 0) or 0)
+
+        pressure_index = round(
+            _clamp(
+                high_risk_flags * 15
+                + medium_risk_flags * 7
+                + max(0.0, night_ratio - 12) * 0.8
+                + volatility_percent * 0.4
+                + max(0.0, 65 - readiness_score) * 0.55
+                + anomaly_risk * 0.25,
+                0.0,
+                100.0,
+            ),
+            2,
+        )
+
+        if momentum == "improving" and pressure_index < 38:
+            outlook = "sunny"
+        elif pressure_index < 62:
+            outlook = "cloudy"
+        else:
+            outlook = "stormy"
+
+        base_commits = max(1, int(latest.get("commits", round(avg_commits)) or 1))
+        slope = 1.04 if outlook == "sunny" else 0.99 if outlook == "cloudy" else 0.93
+        spread = max(2, int(round(max(volatility, base_commits * 0.15))))
+
+        projected_weeks = []
+        for offset in range(1, 4):
+            center = max(1, int(round(base_commits * (slope**offset))))
+            projected_weeks.append(
+                {
+                    "week_offset": offset,
+                    "label": f"+{offset}w",
+                    "expected_min_commits": max(0, center - spread),
+                    "expected_max_commits": center + spread,
+                    "expected_mid_commits": center,
+                    "risk_level": "high" if outlook == "stormy" else "medium" if outlook == "cloudy" else "low",
+                }
+            )
+
+        incident_risk = round(_clamp(pressure_index * 0.85 + high_risk_flags * 6, 5.0, 95.0), 2)
+        expected_review_lag_hours = round(
+            max(4.0, 8 + pressure_index * 0.18 + max(0.0, night_ratio - 15) * 0.05),
+            1,
+        )
+        confidence = round(_clamp(52 + len(recent_weeks) * 4 - volatility_percent * 0.35, 35.0, 95.0), 2)
+
+        signals = [
+            {"name": "Momentum", "value": momentum},
+            {"name": "Volatility (%)", "value": round(volatility_percent, 2)},
+            {"name": "Night Commit Ratio (%)", "value": round(night_ratio, 2)},
+            {"name": "Anomaly Risk Index", "value": round(anomaly_risk, 2)},
+            {"name": "Release Readiness", "value": round(readiness_score, 2)},
+        ]
+
+        summary = (
+            "Stable trajectory with low operational pressure."
+            if outlook == "sunny"
+            else "Mixed signals; prioritize risk controls while maintaining velocity."
+            if outlook == "cloudy"
+            else "Elevated delivery pressure forecasted; reduce risk before scaling release pace."
+        )
+
+        return {
+            "outlook": outlook,
+            "pressure_index": pressure_index,
+            "confidence": confidence,
+            "incident_risk_percent": incident_risk,
+            "expected_review_lag_hours": expected_review_lag_hours,
+            "signals": signals,
+            "projected_weeks": projected_weeks,
+            "forecast_summary": summary,
+        }
+
+    def _pr_pre_mortem_simulator(
+        self,
+        blast_radius: Dict[str, Any],
+        hotspots: List[Dict[str, Any]],
+        top_contributors: List[Dict[str, Any]],
+        engineering_signals: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        candidates = (blast_radius.get("candidates") or [])[:8]
+        if not candidates and hotspots:
+            candidates = [
+                {
+                    "path": item.get("path"),
+                    "directory": (str(item.get("path"))).rsplit("/", 1)[0] if "/" in str(item.get("path")) else ".",
+                    "estimated_neighbor_files": 8,
+                    "complexity": float(item.get("cyclomatic_complexity", 0) or 0),
+                    "size_bytes": 0,
+                    "impact_score": float(item.get("cyclomatic_complexity", 0) or 0) * 2.8,
+                    "risk_tier": "high" if float(item.get("cyclomatic_complexity", 0) or 0) >= 18 else "medium",
+                }
+                for item in hotspots[:8]
+            ]
+
+        reviewers = [
+            str(item.get("name") or item.get("email") or "unknown")
+            for item in top_contributors[:6]
+            if _safe_int(item.get("commits"), 0) > 0
+        ]
+        if not reviewers:
+            reviewers = ["module owner", "tech lead"]
+
+        scenarios = []
+        for idx, candidate in enumerate(candidates):
+            path = str(candidate.get("path", "unknown"))
+            complexity = float(candidate.get("complexity", candidate.get("cyclomatic_complexity", 0)) or 0)
+            impact_score = float(candidate.get("impact_score", 0) or 0)
+            neighbor_files = int(candidate.get("estimated_neighbor_files", 1) or 1)
+            size_bytes = int(candidate.get("size_bytes", 0) or 0)
+            risk_score = round(
+                _clamp(impact_score + complexity * 0.9 + math.log2(max(2, neighbor_files)) * 3, 0.0, 100.0),
+                2,
+            )
+
+            failure_modes = []
+            if complexity >= 20:
+                failure_modes.append(
+                    {
+                        "mode": "branch_logic_regression",
+                        "label": "Branch-heavy logic may regress on edge paths.",
+                        "probability_percent": round(_clamp(42 + complexity * 1.1, 0.0, 95.0), 2),
+                    }
+                )
+            if neighbor_files >= 40:
+                failure_modes.append(
+                    {
+                        "mode": "integration_side_effect",
+                        "label": "Wide module surface increases hidden integration side-effects.",
+                        "probability_percent": round(_clamp(35 + neighbor_files * 0.6, 0.0, 95.0), 2),
+                    }
+                )
+            if size_bytes >= 250000:
+                failure_modes.append(
+                    {
+                        "mode": "review_blind_spot",
+                        "label": "Large artifact size can reduce review depth and miss subtle defects.",
+                        "probability_percent": round(_clamp(28 + math.log2(size_bytes + 1) * 4, 0.0, 90.0), 2),
+                    }
+                )
+            if risk_score >= 70:
+                failure_modes.append(
+                    {
+                        "mode": "rollback_likelihood",
+                        "label": "High blast-radius score indicates elevated rollback risk.",
+                        "probability_percent": round(_clamp(30 + risk_score * 0.5, 0.0, 95.0), 2),
+                    }
+                )
+            if not failure_modes:
+                failure_modes.append(
+                    {
+                        "mode": "localized_regression",
+                        "label": "Localized functional regression remains possible.",
+                        "probability_percent": round(_clamp(18 + risk_score * 0.25, 0.0, 70.0), 2),
+                    }
+                )
+
+            mitigations = [
+                "Add targeted regression tests for changed interfaces and edge paths.",
+                "Assign at least one reviewer with recent ownership in this directory.",
+                "Use a small-scope rollout plan with measurable rollback signals.",
+            ]
+            if risk_score >= 70:
+                mitigations.append("Deploy behind feature flags or staged canary gates.")
+            if not engineering_signals.get("has_ci"):
+                mitigations.append("Run manual smoke tests until CI coverage is available.")
+
+            suggested_reviewers = [
+                reviewers[(idx + offset) % len(reviewers)]
+                for offset in range(min(3, len(reviewers)))
+            ]
+            estimated_review_hours = int(round(max(2.0, risk_score / 18 + len(failure_modes))))
+
+            scenarios.append(
+                {
+                    "scenario_id": f"pm-{idx + 1}",
+                    "target_path": path,
+                    "directory": candidate.get("directory", "."),
+                    "risk_score": risk_score,
+                    "risk_tier": candidate.get("risk_tier", "medium"),
+                    "estimated_review_hours": estimated_review_hours,
+                    "failure_modes": failure_modes,
+                    "mitigations": mitigations[:5],
+                    "suggested_reviewers": suggested_reviewers,
+                }
+            )
+
+        portfolio_risk = round(
+            sum(item["risk_score"] for item in scenarios) / max(1, len(scenarios)),
+            2,
+        )
+        return {
+            "portfolio_risk_score": portfolio_risk,
+            "high_risk_targets": sum(1 for item in scenarios if item["risk_score"] >= 70),
+            "scenarios": scenarios,
+        }
+
+    def _ai_action_briefs(
+        self,
+        pre_mortem: Dict[str, Any],
+        bus_factor_shock: Dict[str, Any],
+        engineering_forecast: Dict[str, Any],
+        anomaly_report: Dict[str, Any],
+        release_readiness: Dict[str, Any],
+        risk_flags: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        briefs: List[Dict[str, Any]] = []
+
+        def add_brief(
+            priority: str,
+            title: str,
+            owner_role: str,
+            why_now: str,
+            first_steps: List[str],
+            success_metric: str,
+            timeline_days: int,
+        ):
+            briefs.append(
+                {
+                    "priority": priority,
+                    "title": title,
+                    "owner_role": owner_role,
+                    "why_now": why_now,
+                    "first_steps": first_steps[:4],
+                    "success_metric": success_metric,
+                    "timeline_days": timeline_days,
+                }
+            )
+
+        top_scenario = (pre_mortem.get("scenarios") or [{}])[0]
+        if top_scenario and top_scenario.get("target_path"):
+            top_risk = float(top_scenario.get("risk_score", 0) or 0)
+            add_brief(
+                priority="P0" if top_risk >= 80 else "P1",
+                title=f"Harden hotspot: {top_scenario.get('target_path')}",
+                owner_role="Module owner + QA partner",
+                why_now=f"Pre-mortem risk score is {round(top_risk, 2)} with elevated blast radius.",
+                first_steps=[
+                    "Add boundary tests and a rollback validation checklist for this path.",
+                    "Break upcoming PRs into isolated slices limited to one risk mode.",
+                    "Gate merge on two approvals including one reviewer outside the primary owner.",
+                ],
+                success_metric="Reduce hotspot risk score by >=15 points over the next two runs.",
+                timeline_days=10,
+            )
+
+        shock_scenarios = bus_factor_shock.get("scenarios") or []
+        weakest_shock = min(shock_scenarios, key=lambda x: float(x.get("resilience_score", 0))) if shock_scenarios else None
+        if weakest_shock:
+            resilience = float(weakest_shock.get("resilience_score", 0) or 0)
+            removed = ", ".join((weakest_shock.get("removed_contributors") or [])[:2]) or "core owners"
+            add_brief(
+                priority="P0" if resilience < 45 else "P1",
+                title="Reduce ownership concentration risk",
+                owner_role="Engineering manager + tech leads",
+                why_now=f"Shock test drops resilience to {round(resilience, 2)} when {removed} are unavailable.",
+                first_steps=[
+                    "Create a two-week ownership rotation for top two critical directories.",
+                    "Require shadow reviewers from a second team on high-risk PRs.",
+                    "Document runbooks for the top three blast-radius modules.",
+                ],
+                success_metric="Increase shock-test resilience score to >=65 in the next analysis cycle.",
+                timeline_days=14,
+            )
+
+        anomaly_risk = float(anomaly_report.get("risk_index", 0) or 0)
+        if anomaly_risk >= 35:
+            add_brief(
+                priority="P1",
+                title="Normalize anomalous delivery patterns",
+                owner_role="Release captain",
+                why_now=f"Anomaly risk index is {round(anomaly_risk, 2)} with unusual commit patterns.",
+                first_steps=[
+                    "Flag mega-commit and wide-surface changes for synchronous review before merge.",
+                    "Add PR template checks for off-hours high-change submissions.",
+                    "Run weekly anomaly review in sprint quality sync.",
+                ],
+                success_metric="Cut anomaly rate by 30% while maintaining weekly throughput.",
+                timeline_days=7,
+            )
+
+        outlook = str(engineering_forecast.get("outlook", "unknown"))
+        forecast_pressure = float(engineering_forecast.get("pressure_index", 0) or 0)
+        if outlook in {"cloudy", "stormy"}:
+            add_brief(
+                priority="P1" if outlook == "cloudy" else "P0",
+                title="Stabilize delivery weather",
+                owner_role="Tech lead",
+                why_now=f"Forecast outlook is {outlook.upper()} with pressure index {round(forecast_pressure, 2)}.",
+                first_steps=[
+                    "Limit concurrent high-risk changes per sprint lane.",
+                    "Allocate explicit time for debt and test reinforcement in next iteration.",
+                    "Track review lag and incident risk as release guardrails.",
+                ],
+                success_metric="Move forecast outlook to SUNNY/CLOUDY with pressure index <45.",
+                timeline_days=10,
+            )
+
+        high_risk_flags = [flag.get("message", "") for flag in risk_flags if flag.get("severity") == "high"]
+        readiness_score = float(release_readiness.get("score", 0) or 0)
+        if readiness_score < 80 or high_risk_flags:
+            add_brief(
+                priority="P1" if readiness_score >= 65 else "P0",
+                title="Raise release confidence",
+                owner_role="Release manager",
+                why_now=f"Release readiness score is {round(readiness_score, 2)} and needs hardening.",
+                first_steps=[
+                    "Close failing release gates and unresolved high-severity risk flags.",
+                    "Add a pre-release dry run with rollback rehearsal.",
+                    "Publish a release checklist owned by cross-functional reviewers.",
+                ],
+                success_metric="Improve readiness score to >=85 with zero failing gates.",
+                timeline_days=14,
+            )
+
+        if not briefs:
+            add_brief(
+                priority="P2",
+                title="Keep healthy engineering cadence",
+                owner_role="Team leads",
+                why_now="Current indicators are stable; preserve reliability as velocity scales.",
+                first_steps=[
+                    "Continue weekly quality and ownership reviews.",
+                    "Monitor hotspot score drift and forecast pressure.",
+                    "Capture learnings from major PRs in lightweight runbooks.",
+                ],
+                success_metric="Maintain health and readiness scores above 80.",
+                timeline_days=14,
+            )
+
+        priority_rank = {"P0": 0, "P1": 1, "P2": 2}
+        briefs = sorted(briefs, key=lambda item: priority_rank.get(item["priority"], 99))[:6]
+        top_priority = briefs[0] if briefs else None
+        roadmap = [
+            {
+                "window": "Days 1-3",
+                "focus": briefs[0]["title"] if len(briefs) > 0 else "Stabilize top risk",
+            },
+            {
+                "window": "Days 4-7",
+                "focus": briefs[1]["title"] if len(briefs) > 1 else "Improve ownership resilience",
+            },
+            {
+                "window": "Week 2",
+                "focus": briefs[2]["title"] if len(briefs) > 2 else "Lift readiness score",
+            },
+        ]
+        narrative = (
+            f"Top action: {top_priority['title']} ({top_priority['priority']})"
+            if top_priority
+            else "No action briefs available."
+        )
+
+        return {
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "top_priority": top_priority,
+            "briefs": briefs,
+            "roadmap": roadmap,
+            "narrative": narrative,
+        }
+
     def _executive_summary(self, insights: Dict[str, Any]) -> List[str]:
         summary = insights["summary"]
         habits = insights["development_habits"]
@@ -1018,6 +1728,10 @@ class InsightService:
         quality = insights["insight_quality"]
         collaboration = insights.get("collaboration_story", {})
         readiness = insights.get("release_readiness", {})
+        shock_test = insights.get("bus_factor_shock_test", {})
+        forecast = insights.get("engineering_weather_forecast", {})
+        anomalies = insights.get("anomaly_detective", {})
+        action_briefs = insights.get("ai_action_briefs", {})
 
         lines = [
             f"Analyzed {summary['total_commits_analyzed']} commits across {summary['total_contributors']} contributors.",
@@ -1034,6 +1748,22 @@ class InsightService:
         if collaboration:
             lines.append(
                 f"Collaboration index is {collaboration.get('collaboration_index', 0)} with {collaboration.get('metrics', {}).get('handoff_events', 0)} cross-author handoffs."
+            )
+        if shock_test:
+            lines.append(
+                f"Bus-factor shock resilience is {shock_test.get('resilience_score', 0)} with top-share concentration at {shock_test.get('top_contributor_share_percent', 0)}%."
+            )
+        if forecast:
+            lines.append(
+                f"Engineering weather outlook is {str(forecast.get('outlook', 'unknown')).upper()} (pressure index {forecast.get('pressure_index', 0)})."
+            )
+        if anomalies:
+            lines.append(
+                f"Anomaly detective flagged {anomalies.get('anomaly_count', 0)} events (risk index {anomalies.get('risk_index', 0)})."
+            )
+        if action_briefs and action_briefs.get("top_priority"):
+            lines.append(
+                f"Top recommended action: {action_briefs.get('top_priority', {}).get('title', 'N/A')}."
             )
         if complexity["hotspots"]:
             top = complexity["hotspots"][0]

@@ -5,7 +5,7 @@ Analysis API endpoints
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from typing import List
+from typing import Any, Dict, List
 import structlog
 
 from app.core.database import get_db
@@ -168,6 +168,56 @@ async def analysis_snapshot_diff(
     return _build_snapshot_diff(previous, current)
 
 
+@router.get("/{analysis_id}/pre-mortem")
+async def get_pre_mortem_simulator(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get PR pre-mortem simulation for a completed analysis."""
+    insights = await _load_deterministic_insights(db, analysis_id)
+    return _feature_or_404(insights, "pr_pre_mortem", "Pre-mortem simulator")
+
+
+@router.get("/{analysis_id}/bus-factor-shock")
+async def get_bus_factor_shock_test(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get bus-factor shock test output for a completed analysis."""
+    insights = await _load_deterministic_insights(db, analysis_id)
+    return _feature_or_404(insights, "bus_factor_shock_test", "Bus-factor shock test")
+
+
+@router.get("/{analysis_id}/engineering-forecast")
+async def get_engineering_weather_forecast(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get engineering weather forecast for a completed analysis."""
+    insights = await _load_deterministic_insights(db, analysis_id)
+    return _feature_or_404(insights, "engineering_weather_forecast", "Engineering weather forecast")
+
+
+@router.get("/{analysis_id}/anomalies")
+async def get_anomaly_detective(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get anomaly-detective report for a completed analysis."""
+    insights = await _load_deterministic_insights(db, analysis_id)
+    return _feature_or_404(insights, "anomaly_detective", "Anomaly detective")
+
+
+@router.get("/{analysis_id}/action-briefs")
+async def get_action_briefs(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get AI action briefs for a completed analysis."""
+    insights = await _load_deterministic_insights(db, analysis_id)
+    return _feature_or_404(insights, "ai_action_briefs", "AI action briefs")
+
+
 @router.delete("/{analysis_id}")
 async def delete_analysis(
     analysis_id: str,
@@ -188,6 +238,23 @@ async def delete_analysis(
     logger.info("Analysis deleted", analysis_id=analysis_id)
     
     return {"message": "Analysis deleted successfully"}
+
+
+async def _load_deterministic_insights(db: AsyncSession, analysis_id: str) -> Dict[str, Any]:
+    result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if analysis.status != "completed":
+        raise HTTPException(status_code=400, detail="Analysis must be completed")
+    return ((analysis.ai_insights or {}).get("deterministic_insights") or {})
+
+
+def _feature_or_404(insights: Dict[str, Any], key: str, label: str) -> Dict[str, Any]:
+    payload = insights.get(key)
+    if not payload:
+        raise HTTPException(status_code=404, detail=f"{label} is not available for this analysis")
+    return payload
 
 
 def _build_snapshot_diff(base: Analysis, target: Analysis):
