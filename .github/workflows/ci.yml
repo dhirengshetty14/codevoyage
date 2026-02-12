@@ -15,6 +15,20 @@ jobs:
   backend:
     name: Backend Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: codevoyage_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d codevoyage_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 8
     defaults:
       run:
         working-directory: backend
@@ -38,6 +52,7 @@ jobs:
       - name: Run backend tests
         env:
           PYTHONPATH: ${{ github.workspace }}/backend
+          TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/codevoyage_test
         run: pytest -q tests
 
       - name: Compile check

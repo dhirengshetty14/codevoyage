@@ -4,7 +4,9 @@ Test configuration and fixtures
 
 import os
 import sys
+import asyncio
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -17,13 +19,16 @@ from app.core.database import Base, get_db
 
 
 # Test database
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-engine = create_async_engine(
-    TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+engine_kwargs = {}
+if TEST_DATABASE_URL.startswith("sqlite"):
+    engine_kwargs = {
+        "connect_args": {"check_same_thread": False},
+        "poolclass": StaticPool,
+    }
+
+engine = create_async_engine(TEST_DATABASE_URL, **engine_kwargs)
 
 TestingSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -37,14 +42,22 @@ async def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
+def event_loop():
+    """Use one event loop for async test session to avoid asyncpg cross-loop issues."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest_asyncio.fixture
 async def client():
     """Create test client"""
     async with AsyncClient(app=app, base_url="http://test") as client:
         yield client
 
 
-@pytest.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True)
 async def setup_database():
     """Setup and teardown test database"""
     # Create tables
@@ -58,7 +71,7 @@ async def setup_database():
         await conn.run_sync(Base.metadata.drop_all)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_session():
     """Create test database session"""
     async with TestingSessionLocal() as session:
